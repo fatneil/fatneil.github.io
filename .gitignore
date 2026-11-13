@@ -1,0 +1,4 @@
+# Never commit personal truck data or backups
+*-data.json
+*backup*.json
+private/

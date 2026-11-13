@@ -1,0 +1,16 @@
+{
+  "name": "FJ62 Garage",
+  "short_name": "FJ62",
+  "description": "Maintenance tracker with a tappable 3D truck. Data stays on your device.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0e141b",
+  "theme_color": "#0e141b",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
