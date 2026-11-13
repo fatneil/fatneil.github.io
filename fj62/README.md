@@ -15,3 +15,5 @@ JSON file and import it on another device.
 - `js/db.js`: IndexedDB storage
 - `sw.js`: offline cache (bump `VERSION` when files change)
 - `vendor/`: three.js r170 (MIT, see `vendor/THREE-LICENSE`)
+- `js/ai.js`: AI invoice reading. Sends invoice photos from the browser to the Claude API (`claude-opus-5-5`, structured outputs) using the owner's own API key, which is stored only in IndexedDB on that device and never included in backups
+- `vendor/anthropic-sdk.mjs`: the official `@anthropic-ai/sdk` 1.8.0 bundled for the browser with esbuild (MIT, see `vendor/ANTHROPIC-SDK-LICENSE`); loaded only when AI reading is used
