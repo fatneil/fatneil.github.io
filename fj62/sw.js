@@ -1,10 +1,10 @@
 // Offline support: cache the app shell. Truck data is never fetched from
 // the network; it lives in IndexedDB on the device.
-const VERSION = 'fj62-v1.0.0';
+const VERSION = 'fj62-v1.1.0';
 const ASSETS = [
   './', 'index.html', 'app.css', 'manifest.webmanifest',
-  'js/app.js', 'js/logic.js', 'js/db.js', 'js/truck3d.js',
-  'vendor/three.module.min.js', 'vendor/addons/controls/OrbitControls.js',
+  'js/app.js', 'js/logic.js', 'js/db.js', 'js/truck3d.js', 'js/ai.js',
+  'vendor/three.module.min.js', 'vendor/addons/controls/OrbitControls.js', 'vendor/anthropic-sdk.mjs',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png',
 ];
 

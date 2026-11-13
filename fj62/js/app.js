@@ -2,12 +2,12 @@ import { kvGet, kvSet, photoGet, photoSet, photoDel, photoClear } from './db.js'
 import * as L from './logic.js';
 
 const { ZONES, ZONE } = L;
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-let state = null, calc = null, truck = null, truckLoading = false, installPrompt = null;
+let state = null, calc = null, truck = null, truckLoading = false, installPrompt = null, aiKey = null;
 const ui = { tab: 'truck', zone: null, ztab: 'due', dueFilter: 'attention', dueZone: '', logQ: '', logZone: '', health: true, xray: false };
 try { Object.assign(ui, JSON.parse(localStorage.getItem('fj62-ui') || '{}')); } catch { /* storage blocked */ }
 const saveUi = () => { try { localStorage.setItem('fj62-ui', JSON.stringify({ tab: ui.tab, health: ui.health })); } catch { /* ignore */ } };
@@ -351,6 +351,22 @@ function renderMore() {
       <button class="btn" data-act="import">Restore from file</button>
     </div>
   </section>
+  <section class="block" id="aiBlock">
+    <h2>AI invoice reading</h2>
+    <p class="muted">Snap or choose an invoice photo in the Add form and Claude reads it: date, mileage, shop, total, line items and part numbers, which systems it touched, and which schedule items it completed. You check the result before saving.</p>
+    <p>${aiKey ? `<span class="pill s-ok">On</span> Key saved on this device (…${esc(aiKey.slice(-4))})` : '<span class="pill s-norecord">Off</span> No API key on this device'}</p>
+    <form class="keyform" data-form="aikey" autocomplete="off">
+      <input type="password" name="key" placeholder="${aiKey ? 'Replace key: sk-ant-…' : 'Paste your Anthropic API key: sk-ant-…'}" aria-label="Anthropic API key" autocomplete="off" spellcheck="false">
+      <button class="btn primary">Save key</button>
+      ${aiKey ? '<button type="button" class="btn danger" data-act="ai-remove">Remove</button>' : ''}
+    </form>
+    <ul class="small muted fine">
+      <li>Uses your own API key from the Anthropic Console (platform.claude.com → API keys). API use is billed to that account, not a claude.ai subscription. Expect a few cents per invoice.</li>
+      <li>Make a separate key just for this app and set a monthly spend limit on it.</li>
+      <li>The key is stored only in this browser on this device. It is not in backups or the website, and it is sent only to Anthropic's API with each read. Add it on each device where you want AI reading.</li>
+      <li>Invoice photos are sent to Anthropic's API to be read.</li>
+    </ul>
+  </section>
   <section class="block">
     <h2>Odometer</h2>
     <p>Estimated now: <b>${L.fmtMiles(calc.est)} mi</b>. Last reading ${calc.reading ? `${L.fmtMiles(calc.reading.miles)} on ${L.fmtDate(calc.reading.date)}` : 'none'}.</p>
@@ -478,8 +494,10 @@ function openEntryForm(existing, preset = {}) {
     <div class="btns">
       <label class="btn primary"><input type="file" accept="image/*" capture="environment" hidden data-photo-in>📷 Snap invoice</label>
       <label class="btn"><input type="file" accept="image/*" multiple hidden data-photo-in>Choose photos</label>
+      <button type="button" class="btn ai" id="aiBtn" hidden>✨ Read with AI</button>
     </div>
     <div class="thumbs" id="fThumbs"></div>
+    <div id="aiBox"></div>
     <label>What was done<input name="title" required value="${esc(e.title)}" placeholder="e.g. Transfer case oil change"></label>
     <div class="grid2">
       <label>Date<input type="date" name="date" required value="${esc(e.date)}"></label>
@@ -517,10 +535,58 @@ function openEntryForm(existing, preset = {}) {
       if (b) box.insertAdjacentHTML('beforeend', `<div class="thumb"><img src="${URL.createObjectURL(b)}" alt=""><button type="button" class="x" data-rm="${pid}" aria-label="Remove photo">✕</button></div>`);
     }
     for (const p of added) box.insertAdjacentHTML('beforeend', `<div class="thumb"><img src="${p.url}" alt=""><button type="button" class="x" data-rm="${p.id}" aria-label="Remove photo">✕</button></div>`);
+    $('#aiBtn', d).hidden = !(keep.length + added.length);
+  };
+  const form = $('#entryForm', d);
+  let aiBusy = false;
+  const runAI = async () => {
+    if (aiBusy) return;
+    const box = $('#aiBox', d), btn = $('#aiBtn', d);
+    if (!aiKey) {
+      box.innerHTML = '<div class="ai-note warn">To read invoices with AI, add your Anthropic API key in <b>More → AI invoice reading</b>.</div>';
+      return;
+    }
+    const blobs = [...(await Promise.all(keep.map(id => photoGet(id)))).filter(Boolean), ...added.map(p => p.blob)];
+    aiBusy = true; btn.disabled = true; btn.textContent = 'Reading…';
+    box.innerHTML = `<div class="ai-note"><span class="spin" aria-hidden="true"></span> Claude is reading ${blobs.length > 1 ? blobs.length + ' photos' : 'the invoice'}. This usually takes 10 to 40 seconds.</div>`;
+    try {
+      const { readInvoice, detailsFromResult } = await import('./ai.js');
+      const { result: r, cost } = await readInvoice({ apiKey: aiKey, blobs, vehicle: state.vehicle, zones: ZONES, tasks: state.tasks, est: calc.est, todayIso: L.isoDate(new Date()) });
+      if (!r.is_invoice) {
+        box.innerHTML = `<div class="ai-note warn">That doesn't look like a service invoice or receipt, so nothing was filled in.${r.uncertain ? '<br>' + esc(r.uncertain) : ''}</div>`;
+        return;
+      }
+      const el = form.elements;
+      if (r.title) el.title.value = r.title;
+      if (r.date) el.date.value = r.date;
+      if (r.odometer != null) { el.miles.value = r.odometer; el.approx.checked = !!r.odometer_approximate; }
+      if (r.shop) el.shop.value = r.shop;
+      if (r.total != null) el.cost.value = r.total;
+      if (r.invoice_number) el.ref.value = r.invoice_number;
+      if (r.kind) el.kind.value = r.kind;
+      const det = detailsFromResult(r);
+      if (det) el.details.value = el.details.value.trim() ? el.details.value.trim() + '\n\n' + det : det;
+      for (const z of r.zones || []) if (ZONE[z]) zones.add(z);
+      const ticked = (r.task_ids || []).map(id => state.tasks.find(t => t.id === id)).filter(Boolean);
+      for (const t of ticked) { tasks.add(t.id); zones.add(t.zone); }
+      drawZones(); drawTasks();
+      const missing = [['date', r.date], ['odometer', r.odometer], ['total', r.total]].filter(x => x[1] == null).map(x => x[0]);
+      box.innerHTML = `<div class="ai-note ok"><b>Filled in from the invoice. Check it before saving.</b>
+        ${ticked.length ? `<br>Schedule items ticked: ${ticked.map(t => esc(t.name)).join(', ')}.` : ''}
+        ${missing.length ? `<br>Not found on the invoice: ${missing.join(', ')}.` : ''}
+        ${r.uncertain ? `<br>Unsure about: ${esc(r.uncertain)}` : ''}
+        <small>Read by Claude · about $${cost.toFixed(cost < 0.1 ? 3 : 2)}</small></div>`;
+    } catch (err) {
+      console.error(err);
+      box.innerHTML = `<div class="ai-note bad">${esc(err.message || String(err))}</div>`;
+    } finally {
+      aiBusy = false; btn.disabled = false; btn.textContent = '✨ Read again';
+    }
   };
   drawZones(); drawTasks(); drawThumbs();
 
   d.onclick = ev => {
+    if (ev.target.closest('#aiBtn')) { runAI(); return; }
     const fz = ev.target.closest('[data-fz]');
     if (fz) { const z = fz.dataset.fz; zones.has(z) ? zones.delete(z) : zones.add(z); drawZones(); drawTasks(); return; }
     const rm = ev.target.closest('[data-rm]');
@@ -539,7 +605,8 @@ function openEntryForm(existing, preset = {}) {
         added.push({ id: L.uid('p'), blob, url: URL.createObjectURL(blob) });
       }
       ev.target.value = '';
-      drawThumbs();
+      await drawThumbs();
+      if (aiKey && !form.elements.title.value.trim()) runAI();
     }
   };
   d.onsubmit = async ev => {
@@ -790,9 +857,13 @@ document.addEventListener('click', async ev => {
     case 'erase':
       if (!confirm('Erase all truck data and photos from this device? This cannot be undone. Make a backup first.')) break;
       if (!confirm('Really erase everything?')) break;
-      await photoClear(); await kvSet('state', null); state = null; ui.zone = null; refresh();
+      await photoClear(); await kvSet('state', null); await kvSet('aiKey', null); aiKey = null; state = null; ui.zone = null; refresh();
       break;
     case 'install': installPrompt?.prompt(); installPrompt = null; break;
+    case 'ai-remove':
+      if (!confirm('Remove the API key from this device?')) break;
+      aiKey = null; await kvSet('aiKey', null); renderMore(); toast('API key removed');
+      break;
   }
 });
 
@@ -808,6 +879,17 @@ document.addEventListener('change', ev => {
   if (k === 'dueZone') { ui.dueZone = t.value; renderDue(); }
   if (k === 'logZone') { ui.logZone = t.value; renderLogList(); }
   if (k === 'mpy') { const n = num(t.value); if (n != null) { state.settings.milesPerYear = n; persist(); } }
+});
+
+document.addEventListener('submit', async ev => {
+  if (ev.target.dataset.form !== 'aikey') return;
+  ev.preventDefault();
+  const key = new FormData(ev.target).get('key').trim();
+  if (!key) return toast('Paste a key first');
+  if (!key.startsWith('sk-ant-') && !confirm('That does not look like an Anthropic API key (they start with "sk-ant-"). Save it anyway?')) return;
+  aiKey = key;
+  await kvSet('aiKey', key);
+  renderMore(); toast('API key saved on this device');
 });
 
 document.addEventListener('input', ev => {
@@ -840,6 +922,7 @@ function setupServiceWorker() {
   renderShell();
   try {
     const saved = await kvGet('state');
+    aiKey = (await kvGet('aiKey')) || null;
     state = saved ? normalize(saved) : null;
   } catch (err) {
     console.error(err);
